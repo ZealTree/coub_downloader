@@ -4,20 +4,46 @@ import json
 import shutil
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QLabel, QLineEdit, QPushButton, QCheckBox, QProgressBar, 
-                            QFileDialog, QTextEdit, QStatusBar, QComboBox)
+                            QFileDialog, QTextEdit, QStatusBar, QComboBox, QMessageBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QProcess
 from PyQt5.QtGui import QClipboard, QIcon
 import requests
 import ffmpeg
 
-DOWNLOAD_DIR = "D:/CoubDownloads"
+# 1. Изменение директории загрузок на кроссплатформенную версию
+DEFAULT_DOWNLOAD_DIR = os.path.join(os.path.expanduser("~"), "CoubDownloads")
 
-def create_download_directory():
-    if not os.path.exists(DOWNLOAD_DIR):
-        os.makedirs(DOWNLOAD_DIR)
+def create_download_directory(directory):
+    try:
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        # 5. Проверка прав на запись
+        test_file = os.path.join(directory, "test_permission")
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.remove(test_file)
+        return True
+    except Exception as e:
+        print(f"Ошибка при создании/проверке директории: {e}")
+        return False
 
 def check_ffmpeg():
-    return shutil.which("ffmpeg") is not None
+    # 7. Более надежная проверка FFmpeg
+    try:
+        ffmpeg_path = shutil.which("ffmpeg")
+        if ffmpeg_path is None:
+            return False
+        
+        # Проверяем версию FFmpeg
+        process = QProcess()
+        process.start("ffmpeg", ["-version"])
+        process.waitForFinished(5000)
+        if process.exitCode() == 0:
+            return True
+        return False
+    except Exception as e:
+        print(f"Ошибка при проверке FFmpeg: {e}")
+        return False
 
 def get_media_urls(coub_url, quality="high"):
     try:
@@ -114,27 +140,29 @@ class DownloadThread(QThread):
     progress_signal = pyqtSignal(int)
     finished_signal = pyqtSignal(bool)
 
-    def __init__(self, coub_url, filename, loop, quality):
+    def __init__(self, coub_url, filename, loop, quality, download_dir):
         super().__init__()
         self.coub_url = coub_url
         self.filename = filename
         self.loop = loop
         self.quality = quality
+        self.download_dir = download_dir
         self.ffmpeg_tasks = []
         self.current_stage = None
 
     def run(self):
         try:
+            # 2. Использование os.path.join для всех путей
+            temp_video = os.path.join(self.download_dir, f"temp_video_{self.filename}")
+            temp_audio = os.path.join(self.download_dir, f"temp_audio_{self.filename}")
+            looped_video = os.path.join(self.download_dir, f"looped_video_{self.filename}")
+            final_path = os.path.join(self.download_dir, self.filename)
+
             video_url, audio_url = get_media_urls(self.coub_url, self.quality)
             if not video_url or not audio_url:
                 self.update_signal.emit("Не удалось получить ссылки на медиа")
                 self.finished_signal.emit(False)
                 return
-
-            temp_video = os.path.join(DOWNLOAD_DIR, f"temp_video_{self.filename}")
-            temp_audio = os.path.join(DOWNLOAD_DIR, f"temp_audio_{self.filename}")
-            looped_video = os.path.join(DOWNLOAD_DIR, f"looped_video_{self.filename}")
-            final_path = os.path.join(DOWNLOAD_DIR, self.filename)
 
             # Этап 1: Скачивание видео (0–40%)
             self.current_stage = "video_download"
@@ -219,14 +247,14 @@ class DownloadThread(QThread):
 
     def handle_looping_progress(self, seconds):
         if self.current_stage == "looping":
-            total_duration = self.get_duration(os.path.join(DOWNLOAD_DIR, f"temp_audio_{self.filename}"))
+            total_duration = self.get_duration(os.path.join(self.download_dir, f"temp_audio_{self.filename}"))
             if total_duration:
                 progress = int(80 + (seconds / total_duration) * 10)
                 self.progress_signal.emit(min(progress, 90))
 
     def handle_merging_progress(self, seconds):
         if self.current_stage == "merging":
-            total_duration = self.get_duration(os.path.join(DOWNLOAD_DIR, f"temp_video_{self.filename}"))
+            total_duration = self.get_duration(os.path.join(self.download_dir, f"temp_video_{self.filename}"))
             if total_duration:
                 progress = int(90 + (seconds / total_duration) * 10)
                 self.progress_signal.emit(min(progress, 100))
@@ -259,8 +287,10 @@ class CoubDownloaderGUI(QMainWindow):
         self.setWindowTitle("Загрузчик Coub")
         self.setGeometry(100, 100, 800, 600)
         self.setWindowIcon(QIcon("icon.ico"))
+        self.download_dir = DEFAULT_DOWNLOAD_DIR
         self.init_ui()
-        create_download_directory()
+        if not create_download_directory(self.download_dir):
+            QMessageBox.warning(self, "Ошибка", f"Не удалось создать/проверить директорию для загрузок: {self.download_dir}")
 
     def init_ui(self):
         main_widget = QWidget()
@@ -293,6 +323,17 @@ class CoubDownloaderGUI(QMainWindow):
         file_layout.addWidget(browse_btn)
         file_layout.addWidget(self.quality_combo)
         
+        # 6. Добавление выбора директории загрузки
+        dir_layout = QHBoxLayout()
+        dir_label = QLabel("Папка для загрузки:")
+        self.dir_input = QLineEdit()
+        self.dir_input.setText(self.download_dir)
+        dir_browse_btn = QPushButton("Выбрать...")
+        dir_browse_btn.clicked.connect(self.browse_download_dir)
+        dir_layout.addWidget(dir_label)
+        dir_layout.addWidget(self.dir_input)
+        dir_layout.addWidget(dir_browse_btn)
+        
         # Options
         self.loop_checkbox = QCheckBox("Зациклить видео под длину аудио")
         self.loop_checkbox.setChecked(False)
@@ -313,6 +354,7 @@ class CoubDownloaderGUI(QMainWindow):
         # Add widgets to layout
         layout.addLayout(url_layout)
         layout.addLayout(file_layout)
+        layout.addLayout(dir_layout)
         layout.addWidget(self.loop_checkbox)
         layout.addWidget(download_btn)
         layout.addWidget(self.progress_bar)
@@ -328,9 +370,18 @@ class CoubDownloaderGUI(QMainWindow):
 
     def browse_directory(self):
         filename, _ = QFileDialog.getSaveFileName(
-            self, "Сохранить видео Coub", DOWNLOAD_DIR, "MP4 файлы (*.mp4)")
+            self, "Сохранить видео Coub", self.download_dir, "MP4 файлы (*.mp4)")
         if filename:
             self.file_input.setText(os.path.basename(filename))
+
+    def browse_download_dir(self):
+        dir_path = QFileDialog.getExistingDirectory(
+            self, "Выберите папку для загрузки", self.download_dir)
+        if dir_path:
+            self.download_dir = dir_path
+            self.dir_input.setText(dir_path)
+            if not create_download_directory(self.download_dir):
+                QMessageBox.warning(self, "Ошибка", f"Не удалось создать/проверить директорию: {dir_path}")
 
     def paste_from_clipboard(self):
         clipboard = QApplication.clipboard()
@@ -347,15 +398,18 @@ class CoubDownloaderGUI(QMainWindow):
     def start_download(self):
         if not check_ffmpeg():
             self.status_bar.showMessage("FFmpeg не найден. Установите FFmpeg и добавьте его в PATH.")
+            QMessageBox.critical(self, "Ошибка", "FFmpeg не найден. Установите FFmpeg и добавьте его в PATH.")
             return
 
         coub_url = self.url_input.text().strip()
         filename = self.file_input.text().strip()
         loop = self.loop_checkbox.isChecked()
         quality = "high" if self.quality_combo.currentText() == "Высокое" else "medium"
+        self.download_dir = self.dir_input.text().strip()
         
         if not coub_url:
             self.status_bar.showMessage("Ошибка: Введите URL Coub")
+            QMessageBox.warning(self, "Ошибка", "Введите URL Coub")
             return
             
         if not filename:
@@ -364,13 +418,19 @@ class CoubDownloaderGUI(QMainWindow):
             filename += ".mp4"
         self.file_input.setText(filename)
         
+        # 7. Проверка директории перед загрузкой
+        if not create_download_directory(self.download_dir):
+            self.status_bar.showMessage(f"Ошибка: Невозможно записать в {self.download_dir}")
+            QMessageBox.critical(self, "Ошибка", f"Невозможно записать в указанную директорию: {self.download_dir}")
+            return
+        
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         
         self.log_output.append(f"Начало загрузки: {coub_url}")
         self.status_bar.showMessage("Скачивание видео...")
         
-        self.download_thread = DownloadThread(coub_url, filename, loop, quality)
+        self.download_thread = DownloadThread(coub_url, filename, loop, quality, self.download_dir)
         self.download_thread.update_signal.connect(self.update_log_and_status)
         self.download_thread.progress_signal.connect(self.update_progress)
         self.download_thread.finished_signal.connect(self.download_finished)
@@ -395,9 +455,11 @@ class CoubDownloaderGUI(QMainWindow):
         if success:
             self.log_output.append("Загрузка успешно завершена!")
             self.status_bar.showMessage("Файл успешно скачан")
+            QMessageBox.information(self, "Успех", "Файл успешно скачан")
         else:
             self.log_output.append("Ошибка при загрузке!")
             self.status_bar.showMessage("Ошибка: Не удалось скачать файл")
+            QMessageBox.critical(self, "Ошибка", "Не удалось скачать файл")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
