@@ -1,12 +1,11 @@
 import sys
 import os
-import json
 import shutil
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QLabel, QLineEdit, QPushButton, QCheckBox, QProgressBar, 
                             QFileDialog, QTextEdit, QStatusBar, QComboBox, QMessageBox)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QProcess
-from PyQt5.QtGui import QClipboard, QIcon
+from PyQt5.QtCore import QThread, pyqtSignal, QProcess
+from PyQt5.QtGui import QIcon
 import requests
 import ffmpeg
 
