@@ -1,24 +1,32 @@
-import re
+"""Explicit SemVer update; version.txt is the only source of truth."""
+import argparse
+from pathlib import Path
+from ci.version import STABLE
 
-def bump_version(version):
-    match = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
-    if not match:
-        raise ValueError("Invalid version format. Expected X.Y.Z")
-    
-    major, minor, patch = map(int, match.groups())
-    patch += 1
-    return f"{major}.{minor}.{patch}"
+
+def bump_version(version, part="patch"):
+    if not STABLE.fullmatch(version):
+        raise ValueError("Expected MAJOR.MINOR.PATCH without leading zeros")
+    major, minor, patch = map(int, version.split("."))
+    if part == "major":
+        return f"{major + 1}.0.0"
+    if part == "minor":
+        return f"{major}.{minor + 1}.0"
+    if part == "patch":
+        return f"{major}.{minor}.{patch + 1}"
+    raise ValueError("Unknown SemVer part")
+
 
 def main():
-    with open("version.txt", "r", encoding="utf-8") as f:
-        current_version = f.read().strip()
-    
-    new_version = bump_version(current_version)
-    
-    with open("version.txt", "w", encoding="utf-8") as f:
-        f.write(new_version + "\n")
-    
-    print(f"Version bumped from {current_version} to {new_version}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--part", choices=["major", "minor", "patch"], default="patch")
+    args = parser.parse_args()
+    path = Path(__file__).with_name("version.txt")
+    old = path.read_text(encoding="utf-8-sig").strip()
+    new = bump_version(old, args.part)
+    path.write_text(new + "\n", encoding="utf-8")
+    print(f"Version bumped from {old} to {new}")
+
 
 if __name__ == "__main__":
     main()
